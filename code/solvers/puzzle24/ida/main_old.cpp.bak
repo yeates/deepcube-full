@@ -1,0 +1,483 @@
+#include <cstring>
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+#include <deque>
+#include <set>
+#include <vector>
+#include <map>
+#include <fstream>
+#include <ctime>
+#include <assert.h>
+#include <csignal>
+#include <cstdlib>
+#include <stdint.h>
+
+static const int dim = 5;
+static const int numTiles = dim*dim;
+
+void copyArr(int fromArr[], int toArr[], int numElems) {
+	for (int i=0; i<numElems; i++) {
+		toArr[i] = fromArr[i];
+	}
+}
+
+void printArr(int arr[], int numElems) {
+	for (int i=0; i<numElems; i++) {
+		printf("%i ",arr[i]);
+	}
+	printf("\n");
+}
+
+bool fileExists(const char *fileName)
+{
+	std::ifstream infile(fileName);
+	return infile.good();
+}
+
+
+class Tiles {
+private:
+	int swapZeroIdxs[numTiles][4];
+public:
+	int zIdx;
+	int state[numTiles];
+	int state_pos[numTiles];
+
+	Tiles(int state_init[numTiles]) {
+		/* Initialize Moves */
+		for (int move=0; move<4; move++) {
+			for (int i=0; i<dim; i++) {
+				for (int j=0; j<dim; j++) {
+					int zIdx = i*dim + j;
+					bool isEligible;
+
+					int swap_i;
+					int swap_j;
+					if (move == 0) { // U
+							isEligible = i < (dim-1);
+							swap_i = i+1;
+							swap_j = j;
+					} else if (move == 1) { // D
+							isEligible = i > 0;
+							swap_i = i-1;
+							swap_j = j;
+					} else if (move == 2) { // L
+							isEligible = j < (dim-1);
+							swap_i = i;
+							swap_j = j+1;
+					} else if (move == 3) { // R
+							isEligible = j > 0;
+							swap_i = i;
+							swap_j = j-1;
+					}
+
+					if (isEligible) {
+						swapZeroIdxs[zIdx][move] = swap_i*dim + swap_j;
+					} else {
+						swapZeroIdxs[zIdx][move] = zIdx;
+					}
+				}
+			}
+		}
+
+		/* Initialize state */
+		copyArr(state_init,state,numTiles);
+		for (int t=0; t<numTiles; t++) { //Get starting bound, initialize state_pos
+			state_pos[state[t]] = t;
+			if (state[t] == 0) {
+				zIdx = t;
+			}
+		}
+	}
+
+	bool noChange(int move) {
+		return(zIdx == swapZeroIdxs[zIdx][move]);
+	}
+
+	int peekVal(int move) {
+		return state[swapZeroIdxs[zIdx][move]];
+	}
+
+	int nextState(int move) {
+		int swapZeroIdx = swapZeroIdxs[zIdx][move];
+
+		int val = state[swapZeroIdx];
+		state[zIdx] = val;
+		state[swapZeroIdx] = 0;
+		
+		state_pos[val] = zIdx;
+		state_pos[0] = swapZeroIdx;
+
+		zIdx = swapZeroIdx;
+
+		return(val);
+	}
+
+	void prevState(int zIdx, int swapZeroIdx, int val) {
+		this->zIdx = zIdx;
+
+		state[zIdx] = 0;
+		state[swapZeroIdx] = val;
+
+		state_pos[val] = swapZeroIdx;
+		state_pos[0] = zIdx;
+	}
+};
+
+class PDB {
+private:
+	uint8_t *pdb;
+	int *posMult;
+	int *tileNames;
+	int numTiles_pdb;
+
+	int numEntries_found;
+	int minBound;
+
+	std::set<int> seenMin;
+	std::deque<int> unexpanded;
+
+public:
+	PDB(int tileNames[], int numTiles_pdb, const char *filename) {
+		this->numTiles_pdb = numTiles_pdb;
+		this->tileNames = new int[numTiles_pdb];
+		copyArr(tileNames,this->tileNames,numTiles_pdb);
+    
+		/* Initialize pdb size*/
+		posMult = new int[numTiles_pdb];
+		int entriesPerPos = 1;
+		int numEntries = 1;
+		for (int i=numTiles_pdb-1; i>=0; i--) {
+			fprintf(stderr,"I: %i (%i), Entries per pos: %i\n",i,tileNames[i],entriesPerPos);
+			posMult[i] = entriesPerPos;
+			entriesPerPos *= (numTiles);
+			numEntries *= (numTiles-i);
+		}
+		fprintf(stderr,"Pattern database size is %i, number of entires is %i\n",entriesPerPos,numEntries);
+
+		pdb = new uint8_t[entriesPerPos];
+
+		if (fileExists(filename)) {
+			fprintf(stderr,"Loading file %s\n",filename);
+			FILE *pFile = fopen(filename, "rb");
+			fread(pdb , sizeof(uint8_t), entriesPerPos, pFile);
+			fclose(pFile);
+		} else {
+			/* Do BFS to get all pos*/
+			fprintf(stderr,"Creating pdb and saving to file %s\n",filename);
+
+			int solvedTiles[numTiles] = {0};
+			for (int i=0; i<numTiles_pdb; i++) {
+				solvedTiles[tileNames[i]-1] = tileNames[i];
+			}
+			printArr(solvedTiles,numTiles);
+			
+			Tiles *tiles = new Tiles(solvedTiles);
+			numEntries_found = 0;
+			int bound = 0;
+
+      seenMin.clear();
+
+      int pdb_idx = lookup_idx(tiles);
+      unexpanded.push_back(pdb_idx);
+      seenMin.insert(pdb_idx);
+      pdb[pdb_idx] = (uint8_t) bound;
+      numEntries_found++;
+
+      bound++;
+
+			while(numEntries_found != numEntries) {
+				timespec ts1,ts2;
+				clock_gettime(CLOCK_REALTIME, &ts1);
+
+        int numUnexpanded = unexpanded.size();
+        for (int i=0; i<numUnexpanded; i++) {
+          int pdb_idx_unex = unexpanded[0];
+          int *state = idxToState(pdb_idx_unex);
+          unexpanded.pop_front();
+          Tiles *tiles_node = new Tiles(state);
+
+					if (pdb_idx_unex != lookup_idx(tiles_node)) {
+						fprintf(stderr,"ERROR:idxToState not consistent\n");
+						std::abort();
+					}
+
+          delete state;
+
+          for (int zIdx=0; zIdx<numTiles; zIdx++) {
+            if (tiles_node->state[zIdx] != 0) {
+              continue;
+            }
+            tiles_node->zIdx = zIdx;
+
+            for (int move=0; move<4; move++) {
+              if (tiles_node->peekVal(move) == 0) { //Check to skip
+                continue;
+              }
+              int val = tiles_node->nextState(move);
+              int swapZeroIdx = tiles_node->zIdx;
+              int pdb_idx = lookup_idx(tiles_node);
+
+              if (!seenMin.count(pdb_idx)) {
+                unexpanded.push_back(pdb_idx);
+                seenMin.insert(pdb_idx);
+                pdb[pdb_idx] = (uint8_t) bound;
+                numEntries_found++;
+              }
+
+              tiles_node->prevState(zIdx,swapZeroIdx,val);
+            }
+          }
+          delete tiles_node;
+        }
+        bound++;
+
+				//seenMin.clear();
+				//minBound = -1;
+				//iddfs(tiles, bound, 0);
+				//bound = minBound;
+				
+				clock_gettime(CLOCK_REALTIME, &ts2);
+				int timeDiff = int( ts2.tv_sec - ts1.tv_sec );
+				fprintf(stderr,"Bound: %i, unexpandedSize: %li, Entires: %i/%i (%f%%), Time: %i\n",bound,unexpanded.size(),numEntries_found,numEntries,100.0*((float) numEntries_found)/((float) numEntries), timeDiff);
+			}
+
+			fprintf(stderr,"Saving file to %s\n",filename);
+			FILE *pFile = fopen(filename, "wb");
+			fwrite(pdb , sizeof(uint8_t), entriesPerPos, pFile);
+			fclose(pFile);
+		}
+	}
+	
+	/*
+		Find the index in the pattern database
+	*/
+	int lookup_idx(Tiles *tiles) {
+		int *state_pos = tiles->state_pos;
+
+		int idx = 0;
+		for (int i=0; i<numTiles_pdb; i++) {
+			// Determine position
+			//const int tileName = tileNames[i];
+			//const int origPos = state_pos[tileName];
+			//int effective_pos = origPos;
+			//for (int j=0; j<i; j++) {
+			//	if (state_pos[tileNames[j]] < origPos) {
+			//		effective_pos -= 1;
+			//	}
+			//}
+
+			//Add position multiplied by precomputed value
+			idx += state_pos[tileNames[i]]*posMult[i];
+		}
+
+		return idx;
+	}
+
+  int* idxToState(int lookup_idx) {
+    int *state = new int[numTiles];
+    for (int i=0; i<numTiles; i++) {
+      state[i] = 0;
+    }
+
+    for (int i=0; i<numTiles_pdb; i++) {
+      int origPos = lookup_idx/posMult[i];
+
+      state[origPos] = tileNames[i];
+
+      lookup_idx = lookup_idx - origPos*posMult[i];
+    }
+		if (lookup_idx != 0) {
+			fprintf(stderr,"ERROR:idxToState failed!\n");
+			std::abort();
+		}
+
+    return state;
+  }
+
+
+	/*
+		Return: Value of state in pdb
+	*/
+	int lookup(Tiles *tiles) {
+		return (int) pdb[lookup_idx(tiles)];
+	}
+
+};
+
+class IDAStar {
+	Tiles *tiles;
+	int manhattanDist[numTiles][numTiles];
+	int manhattanDist_incr[numTiles][numTiles][numTiles];
+
+	PDB *pdb_6_1;
+	PDB *pdb_6_2;
+	PDB *pdb_6_3;
+	PDB *pdb_6_4;
+
+	long int nodesSeen;
+	int minBound;
+	int movesToRev[4];
+	std::deque<int> moveStack;
+
+	int getHeuristic(Tiles *tiles) {
+		int heuristic = pdb_6_1->lookup(tiles) + pdb_6_2->lookup(tiles) + pdb_6_3->lookup(tiles) + pdb_6_4->lookup(tiles);
+		return heuristic;
+	}
+public:
+	IDAStar(int state_init[numTiles]) {
+		tiles = new Tiles(state_init);
+
+		int tileNames_6_1[6] = {1,2,6,7,11,12};
+		pdb_6_1 = new PDB(tileNames_6_1, 6, "6_6_6_1.bin");
+
+		int tileNames_6_2[6] = {3,4,5,8,9,10};
+		pdb_6_2 = new PDB(tileNames_6_2, 6, "6_6_6_2.bin");
+
+		int tileNames_6_3[6] = {16,17,18,21,22,23};
+		pdb_6_3 = new PDB(tileNames_6_3, 6, "6_6_6_3.bin");
+
+		int tileNames_6_4[6] = {13,14,15,19,20,24};
+		pdb_6_4 = new PDB(tileNames_6_4, 6, "6_6_6_4.bin");
+
+		int movesToRev_vals[4] = {1,0,3,2};
+		copyArr(movesToRev_vals,movesToRev,4);
+
+		/* Initialize Heuristics */
+		//Manattan Distance
+		for (int val=0; val<numTiles; val++) {
+			for (int i = 0; i < dim; i++) {
+				for (int j = 0; j < dim; j++) {
+					if (val == 0) {
+						manhattanDist[val][i*dim + j] = 0;
+					} else {
+						manhattanDist[val][i*dim + j] = abs(((val-1) / dim) - i) + abs(((val-1) % dim) - j);
+					}
+				}
+			}
+		}
+
+		//Incremental heuristic
+		for (int val=0; val<numTiles; val++) {
+			for (int newBlank = 0; newBlank < numTiles; newBlank++) {
+				for (int oldBlank = 0; oldBlank < numTiles; oldBlank++) {
+					int heur_old = manhattanDist[val][newBlank];
+					int heur_new = manhattanDist[val][oldBlank];
+
+					manhattanDist_incr[val][newBlank][oldBlank] = heur_new - heur_old;
+				}
+			}
+		}
+	}
+
+	bool ida(Tiles *tiles, int heuristic, int bound, int g, int moveToRev) {
+		nodesSeen++;
+
+		int f = g + heuristic;
+
+		bool isSolved = heuristic == 0;
+
+		if (f > bound) { //Check bound
+			if (minBound == -1 || f < minBound) {
+				minBound = f;
+			}
+			return false;
+		} else if (isSolved) { //Check solved
+			return true;
+		}
+
+		for (int move=0; move<4; move++) {
+			if (move == moveToRev || tiles->noChange(move)) { //Check to skip
+				continue;
+			}
+			
+			// Get next state
+			int zIdx = tiles->zIdx;
+			int val = tiles->nextState(move);
+			int swapZeroIdx = tiles->zIdx;
+
+			//int childHeuristic = heuristic + manhattanDist_incr[val][swapZeroIdx][zIdx];
+			int childHeuristic = getHeuristic(tiles);
+
+			
+			//Search
+			bool solnFound = ida(tiles, childHeuristic, bound, g+1, movesToRev[move]);
+			if (solnFound) {
+				moveStack.push_front(move);
+				return solnFound;
+			}
+
+			//Reverse state
+			tiles->prevState(zIdx,swapZeroIdx,val);
+		}
+
+		return false;
+	}
+
+	void search() {
+		int bound_start = 0;
+		for (int t=0; t<numTiles; t++) { //Get starting bound
+			bound_start += manhattanDist[tiles->state[t]][t];
+		}
+		bound_start = getHeuristic(tiles);
+
+		printf("Starting Bound: %i, Zero Index: %i, PDB_IDX: %i, PDB_VALS: %i,%i,%i,%i\n",bound_start,tiles->zIdx,pdb_6_1->lookup_idx(tiles),pdb_6_1->lookup(tiles),pdb_6_2->lookup(tiles),pdb_6_3->lookup(tiles),pdb_6_4->lookup(tiles));
+		
+		int bound = bound_start; //Do IDA
+		bool solnFound = false;
+		long int totalNodesSeen = 0;
+		while (solnFound == false) {
+			nodesSeen = 0;
+			minBound = -1;
+
+			solnFound = ida(tiles,bound_start,bound,0,-1);
+
+			printf("Bound: %i, Nodes Seen: %li, Move stack size: %lu\n",bound,nodesSeen,moveStack.size());
+			bound = minBound;
+
+			totalNodesSeen += nodesSeen;
+		}
+
+		// Print moves
+		printf("Total nodes generated:\n%li\n",totalNodesSeen);
+		char movesToSym[4] = {'U','D','L','R'};
+		printf("Moves are:\n");
+		for (int i=0; i<(int) moveStack.size(); i++) {
+			printf("%c",movesToSym[moveStack[i]]);
+			if (i < (int) moveStack.size() - 1) {
+				printf(" ");
+			}
+		}
+		printf("\n");
+	}
+};
+
+int main(int argc, const char *argv[]) {
+	printf("The argument supplied is %s\n", argv[1]);
+
+	/* Parse Input */
+	printf("Parsing Input\n");
+	int init[numTiles];
+  for (int t = 0; t < numTiles; t++) {
+		int p;
+    sscanf(argv[1]++, " %u", &p);
+    init[t] = p;
+		while ((*argv[1]) != ' ') {
+			argv[1]++;
+		}
+  }
+
+  for (int t = 0; t < numTiles; t++) {
+		std::cout << init[t] << " ";
+	}
+	std::cout << "\n";
+
+	printf("Initializing Search\n");
+	IDAStar search(init);
+
+	printf("Searching\n");
+	search.search();
+
+	return 0;
+}

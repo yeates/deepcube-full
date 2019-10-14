@@ -1,0 +1,5 @@
+# This script will run as part of the build phase, after all packages have been installed.
+# You can use it customize the computational environment, manually install packages by downloading and extracting them,
+# or do any kind of preparation involving the filesystem.
+# Note: this script will not have access to any code or data.
+

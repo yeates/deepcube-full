@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -ex
+
+#cd ml_utils/
+#make
+#cd ../
+
+export CUDA_VISIBLE_DEVICES="0"
+
+###----------------------------------------------------------------------------###
+echo "----Running DeepCubeA on 100 stataes of Rubik's Cube data----";
+echo "----Hyperparameters for weighted A* search are N=100 and \lambda=0.2----";
+echo "----For results in the paper use --nnet_parallel 10000 --depth_penalty 0.6 --startIdx 0 (will take many hours to complete)----"; echo
+sleep 5
+
+python scripts/solveStartingStates.py --input ../data/cube3/states.pkl --env cube3 --methods nnet --model_loc savedModels/cube3/1/ --nnet_parallel 100 --depth_penalty 0.2 --startIdx 900
+
+echo "Results for Rubik's Cube with precomputed N=10000 and \lambda=0.6"
+python extra/compareSolns.py --soln1 testData/cube3/states_nnetPar200_depthP0.1_bfs0_optimal_solved.pkl --soln2 testData/cube3/states_nnetPar10000_depthP0.6_bfs0_nnet_solved.pkl
+sleep 5
